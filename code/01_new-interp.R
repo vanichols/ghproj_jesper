@@ -10,6 +10,8 @@ rm(list = ls())
 # start with 1
 n_reps <- 2
 
+yield_max <- 6 #--seems arbitrary but we can find out
+weeds_max <- 100 #--weeds per unit area (again, arbitrary)
 
 # intensities -------------------------------------------------------------
 # 9 intensities (make so can remove some, change range?)
@@ -37,7 +39,7 @@ d1a <- expand_grid(tibble(int = range_int,
        L0 = 0.5),
        tibble(cropsens = c(0.25, 0.75))) %>% 
   mutate(L = L0 * exp(-cropsens * int),
-         cropsoilcov = (L0-L)/L0*100) 
+         cropcov_pct = (L0-L)/L0*100) 
 
 #--look at it
 d1a %>% 
@@ -46,13 +48,13 @@ d1a %>%
 
 #--the less sensitive crop has less coverate at the same intensity
 d1a %>% 
-  ggplot(aes(int, cropsoilcov, group = cropsens)) + 
+  ggplot(aes(int, cropcov_pct, group = cropsens)) + 
   geom_line(aes(color = as.factor(cropsens)))
 
 d1b <- 
   d1a %>%
-  mutate(cropsens = ifelse(cropsens == 0.25, "Low (0.25)", "High (0.75)")) %>% 
-  select(cropsens, int, cropsoilcov) %>% 
+  mutate(cropsens = ifelse(cropsens == 0.25, "Low crop sens to harr (0.25)", "High crop sens to harr (0.75)")) %>% 
+  select(cropsens, int, cropcov_pct) %>% 
   arrange(cropsens, int)
 
 #use number of replicates to create a dataset
@@ -61,9 +63,11 @@ d1 <- NULL
 for (i in 1:n_reps){
   di <- 
     d1b %>% 
-    mutate(rep = i,
-           cropsoilcov_meas = cropsoilcov + rnorm(1, 0, sd = csc_sd),
-           cropsoilcov_meas = ifelse(cropsoilcov == 0, 0, cropsoilcov_meas))
+    mutate(rep = i) %>% 
+    rowwise() %>% 
+    mutate(msmt_error = rnorm(1, 0, sd = csc_sd)) %>%
+    mutate(cropcov_pct_meas = cropcov_pct + msmt_error, 
+           cropcov_pct_meas = ifelse(cropcov_pct == 0, 0, cropcov_pct_meas))
     
   d1 <- bind_rows(d1, di)       
   
@@ -71,8 +75,8 @@ for (i in 1:n_reps){
 
 d1 %>% 
   ggplot() + 
-  geom_line(aes(int, cropsoilcov, group = rep), color = "black") + 
-  geom_line(aes(int, cropsoilcov_meas, group = rep), color = "red") + 
+  geom_line(aes(int, cropcov_pct, group = rep), color = "black") + 
+  geom_point(aes(int, cropcov_pct_meas, group = rep, color = as.factor(rep))) + 
   facet_grid(.~cropsens)
 
 
@@ -85,23 +89,22 @@ d1 %>%
 #--so it is kind of 'weed sensitivity', and we hope it is higher than the crop sensitivity
 #--weed control should never go above 100% though
 
-#--assign a variation, it should be higher than the crops because weeds vary more
-wctl_sd <- csc_sd * 2
+#--assign a variation, weeds are pretty variable, I'm not sure what a fair number here is
+wden_sd <- weeds_max * 0.05
 
 d2a <- expand_grid(tibble(int = range_int,
-                          W0 = 100), #--100 weeds per unit area
+                          W0 = weeds_max), #--100 weeds per unit area
                    tibble(weedval = c(1, 1.88, 5))) %>% 
   mutate(W = W0 * exp(-weedval * log(int + 1)),
-         weedctl = (W0-W)/W0*100) 
+         weedctl_pct = (W0-W)/W0*100) 
 
 d2a %>% 
-  ggplot(aes(int, weedctl, group = weedval)) + 
+  ggplot(aes(int, weedctl_pct, group = weedval)) + 
   geom_line(aes(color = as.factor(weedval)))
 
 d2b <- 
   d2a %>% 
-  filter(weedval == 1.88) %>%  
-  select(int, weedctl)
+  filter(weedval == 1.88)
 
 #use number of replicates to create a dataset
 d2 <- NULL
@@ -109,9 +112,10 @@ d2 <- NULL
 for (i in 1:n_reps){
   di <- 
     d2b %>% 
-    mutate(rep = i,
-           weedctl_meas = weedctl + rnorm(1, 0, sd = wctl_sd),
-           weedctl_meas = ifelse(weedctl == 0, 0, weedctl_meas))
+    mutate(rep = i) %>% 
+    rowwise() %>% 
+    mutate(msmt_error = rnorm(1, 0, sd = wden_sd)) %>%
+    mutate(W_meas = W + msmt_error)
   
   d2 <- bind_rows(d2, di)       
   
@@ -120,8 +124,8 @@ for (i in 1:n_reps){
 
 d2 %>% 
   ggplot() + 
-  geom_line(aes(int, weedctl, group = rep), color = "black") + 
-  geom_line(aes(int, weedctl_meas, group = rep), color = "red") 
+  geom_line(aes(int, W, group = rep), color = "black") + 
+  geom_point(aes(int, W_meas, group = rep, color = as.factor(rep))) 
 
 # 3. intensity-driven crop yield loss (%) ------------------------------------
 # - Weed free crop yield loss (%) at each soil cover 
@@ -133,124 +137,91 @@ d2 %>%
 # - int = b + ln(1-CSC)
 
 #--assign a variation, let's say yields can only be measured within 2.5% accuracy
-wfyld_sd <- 2.5
+wfyld_sd <- 0.001*yield_max
 
 d3a <- 
   d1 %>% 
-  mutate(Y0 = 6,
+  mutate(Y0 = yield_max,
          #yldres = 0.0125,#--this can just be changed if using cropsoilcov_meas instead of 'int', 5.71 is lowest
-         yldres = 0.00075) %>% 
-  mutate(Y = Y0 * exp(-yldres * cropsoilcov_meas),
+         yldres = 0.00175) %>% 
+  mutate(wfY = Y0 * exp(-yldres * cropcov_pct_meas),
          #Y2 = Y0 * exp(-yldres * int))
-         wfyieldloss = (Y0-Y)/Y0*100) 
+         wfyieldloss_pct = (Y0-wfY)/Y0*100) 
 
 
+#--it is such a small range it looks linear, I guess
 d3a %>% 
-  ggplot(aes(cropsoilcov_meas, wfyieldloss, group = cropsens)) + 
-  geom_line(aes(color = as.factor(cropsens)))
+  ggplot(aes(cropcov_pct_meas, wfY, group = cropsens)) + 
+  geom_point(aes(color = as.factor(cropsens)))
 
 d3b <- 
-  d3a %>% 
-  select(cropsens, int, cropsoilcov, rep, cropsoilcov_meas, wfyieldloss)
+  d3a 
 
 #use number of replicates to create a dataset
 d3 <- NULL
 
+
 for (i in 1:n_reps){
   di <- 
     d3b %>% 
-    mutate(rep = i,
-           wfyieldloss_meas = wfyieldloss + rnorm(1, 0, sd = wfyld_sd),
-           wfyieldloss_meas = ifelse(wfyieldloss == 0, 0, wfyieldloss_meas))
-  
-  d3 <- bind_rows(d3, di)       
+    mutate(rep = i) %>% 
+    rowwise() %>% 
+    mutate(msmt_error = rnorm(1, 0, sd = wfyld_sd)*Y0) %>%
+    mutate(wfY_meas = wfY + msmt_error)
+    
+    d3 <- bind_rows(d3, di)       
   
 }
 
-d3
+#--this seems realistic
+d3 %>% 
+  ggplot(aes(cropcov_pct_meas)) + 
+  geom_line(aes(y = wfY), color = "black") + 
+  geom_point(aes(y = wfY_meas, color = as.factor(rep)), size = 2) + 
+  facet_grid(cropsens~yldres)
 
-# 6. weed-driven yield loss (%) ----------------------------------------------
+# 4. weed-driven yield loss (%) ----------------------------------------------
 # estimated using Cousens 
 # here it is as interpreted by Jesper 
 # he says yield as a % of max at a given weed density is:
-# = (1 - (I*W1)/(100*(1+(I*W1)/A)) where W1 is the weed density
+# Y = Y0 * (1 - (I*W1)/(100*(1+(I*W1)/A)) where W1 is the weed density
 # - the weed density input would have variation
 # - The assumed parameters would vary by weed community
-jc_A <- 55 #-not sure what this represents or how much it would vary
-jc_IA <- 0.2 #-not sure what this represents, this is for a highly competitive community
-jc_IG <- 0.04 #-a low competitive weed community
 
-j_wyA_abs <- max_yield * (1 - ( (jc_IA * j_wd) / (100*(1 + ( (jc_IA*j_wd)/jc_A ))) ))
-j_wyG_abs <- max_yield * (1 - ( (jc_IG * j_wd) / (100*(1 + ( (jc_IG*j_wd)/jc_A ))) ))
+d4a <- 
+  expand_grid(tibble(int = range_int, Y0 = yield_max), tibble(cropweedsens = c(0.2, 0.05))) %>%
+  expand_grid(., tibble(Aval = c(25, 55, 100))) %>% #--this seems to change the 0 intercept
+  left_join(d2, relationship = "many-to-many") %>%
+  arrange(rep, cropweedsens, Aval) %>% 
+  mutate(wY = Y0*(1 - (cropweedsens * W)/(100*(1+(cropweedsens * W)/Aval))),
+         wY_meas = Y0*(1 - (cropweedsens * W_meas)/(100*(1+(cropweedsens * W_meas)/Aval)))) 
 
-j_wylA <- ( (jc_IA * j_wd) / (100*(1 + ( (jc_IA*j_wd)/jc_A ))) ) * 100
-j_wylG <- ( (jc_IG * j_wd) / (100*(1 + ( (jc_IG*j_wd)/jc_A ))) ) * 100
+#--get a feel for the constants
+d4a %>% 
+  ggplot(aes(int, wY)) + 
+  geom_line(aes(group = interaction(Aval, cropweedsens), color = Aval, size = cropweedsens))
 
-#
-
-# total yield losses at each intensity (%) --------------------------------
-
-#--highly selective crop
-j_ytot_HA <- 100 - j_wfylH - j_wylA
-j_ytot_HG <- 100 - j_wfylH - j_wylG
-
-j_ytot_HA_abs <- j_wyA_abs - j_wfylH_abs
-j_ytot_HG_abs <- j_wyG_abs - j_wfylH_abs
+d4 <-
+  d4a %>% 
+  mutate(cropweedsens = ifelse(cropweedsens == 0.2, "Agg weeds (0.2)", "Nice weeds (0.05)")) %>% 
+  filter(Aval == 55)
 
 
-#--low selective crop
-j_ytot_LA <- 100 - j_wfylL - j_wylA
-j_ytot_LG <- 100 - j_wfylL - j_wylG
+# 5. total yield losses --------------------------------
 
-j_ytot_LA_abs <- j_wyA_abs - j_wfylL_abs
-j_ytot_LG_abs <- j_wyG_abs - j_wfylL_abs
+#--there is something wrong here...it shouldn't be a many-to-many
+d5a <- 
+  d4 %>% 
+  select(int, Y0, cropweedsens, rep, wY, wY_meas) %>% 
+  left_join(d3 %>%
+              select(int, Y0, cropsens, rep, cropcov_pct, cropcov_pct_meas, wfY, wfY_meas),
+            by = c("int", "Y0", "rep"), relationship = "many-to-many") %>% 
+  mutate(totyld = Y0 - (Y0 - wY) - (Y0 - wfY),
+         totyld_meas = Y0 - (Y0 - wY_meas) - (Y0 - wfY_meas)) 
 
-#--take all of these and calc optimum soil cover using
-#  a polynomial fit or something? unclear from his paper
-#  versus ANOVA to compare each of the intensities
-
-d_H <- 
-  tibble(Harrow_inten = j_int,
-         weedden = j_wd,
-       cropsoilcover = j_crH,
-       agg_weeds = j_ytot_HA_abs,
-       gen_weeds = j_ytot_HG_abs) %>% 
-  mutate(cropselectivity = "high")
-
-d_L <- 
-  tibble(Harrow_inten = j_int,
-         weedden = j_wd,
-         cropsoilcover = j_crL,
-         agg_weeds = j_ytot_LA_abs,
-         gen_weeds = j_ytot_LG_abs) %>% 
-  mutate(cropselectivity = "low")
-
-
-#--grouped by crop selectiveness       
-d_H %>% 
-  bind_rows(d_L) %>%
-  pivot_longer(agg_weeds:gen_weeds, names_to = "weed_aggressiveness", values_to = "yield")  %>%
-  group_by(cropselectivity, weed_aggressiveness) %>% 
-  mutate(maxval = max(yield),
-         maxval = ifelse(maxval == yield, maxval, NA)) %>%
-  ggplot(aes(cropsoilcover, yield)) + 
-  geom_point(aes(y = maxval, color = weed_aggressiveness), pch = 16) + 
-  geom_line(aes(color = weed_aggressiveness)) + 
-  facet_grid(.~cropselectivity) + 
-  scale_y_continuous(limits = c(5, 6))
-
-#--grouped by weed aggressiveness, which is what he does bc the crop soil cover varies in his x axis
-d_H %>% 
-  bind_rows(d_L) %>%
-  pivot_longer(agg_weeds:gen_weeds, names_to = "weed_aggressiveness", values_to = "yield")  %>%
-  group_by(cropselectivity, weed_aggressiveness) %>% 
-  mutate(maxval = max(yield),
-         maxval = ifelse(maxval == yield, maxval, NA)) %>%
-  ggplot(aes(cropsoilcover, yield)) + 
-  geom_point(aes(y = maxval, color = cropselectivity), pch = 16) + 
-  geom_line(aes(color = cropselectivity)) + 
-  facet_grid(.~weed_aggressiveness) + 
-  scale_y_continuous(limits = c(5, 6)) +
-  theme(legend.position = "bottom")
-
+d5a %>% 
+  ggplot() + 
+  geom_point(aes(cropcov_pct, totyld, group = rep), color = "black") + 
+  geom_point(aes(cropcov_pct_meas, totyld_meas, group = rep), color = "red") + 
+  facet_grid(cropweedsens ~ cropsens)
 
