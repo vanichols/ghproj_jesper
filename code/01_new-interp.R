@@ -7,7 +7,7 @@ rm(list = ls())
 
 
 # replicates --------------------------------------------------------------
-# start with 1
+# start with 1 or 2
 n_reps <- 2
 
 yield_max <- 6 #--seems arbitrary but we can find out
@@ -31,8 +31,8 @@ range_int <- seq(0, 4, by = 0.5)
 #-b seems arbitrary, since the intensity units are arbitrary
 #--is the entire paper just garbage?
 
-#--assign a variation
-csc_sd <- 2
+#--assign a variation in yield msmts
+csc_sd <- 0.1*yield_max
 
 #--use intensity range and two sensitivity values to get theoretical crop soil cover
 d1a <- expand_grid(tibble(int = range_int,
@@ -90,7 +90,7 @@ d1 %>%
 #--weed control should never go above 100% though
 
 #--assign a variation, weeds are pretty variable, I'm not sure what a fair number here is
-wden_sd <- weeds_max * 0.05
+wden_sd <- weeds_max * 0.1
 
 d2a <- expand_grid(tibble(int = range_int,
                           W0 = weeds_max), #--100 weeds per unit area
@@ -225,3 +225,34 @@ d5a %>%
   geom_point(aes(cropcov_pct_meas, totyld_meas, group = rep), color = "red") + 
   facet_grid(cropweedsens ~ cropsens)
 
+
+# 6. fit a quadratic ------------------------------------------------------
+
+d6 <- 
+  d5a %>% 
+  filter(grepl("Agg", cropweedsens),
+         grepl("Low", cropsens)) %>% 
+  select(cropcov_pct, totyld) %>% 
+  mutate(cropcov_pct2 = cropcov_pct*cropcov_pct)
+
+d6
+
+data$hours2 <- data$hours^2
+
+#fit quadratic regression model
+quadraticModel <- lm(totyld ~ cropcov_pct + cropcov_pct2, data=d6)
+
+#view model summary
+summary(quadraticModel)
+
+cropcovVals <- seq(0, 70, 0.1)
+totyldPredict <- predict(quadraticModel,
+                            list(cropcov_pct = cropcovVals, 
+                                 cropcov_pct2 = cropcovVals*cropcovVals))
+
+tibble(cropcov_pct = cropcovVals,
+       totyldPred = totyldPredict) %>% 
+  left_join(d6 %>% mutate(cropcov_pct = round(cropcov_pct, 1))) %>% 
+  ggplot() +
+  geom_point(aes(cropcov_pct, totyld)) +
+  geom_line(aes(cropcov_pct, totyldPred))
