@@ -2,6 +2,7 @@
 # make it so it will be easy to play with
 
 library(tidyverse)
+library(broom)
 
 rm(list = ls())
 
@@ -226,33 +227,97 @@ d5a %>%
   facet_grid(cropweedsens ~ cropsens)
 
 
-# 6. fit a quadratic ------------------------------------------------------
 
+# 6. fit nls quadratic --------------------------------------------------
+
+#--pick one group
 d6 <- 
   d5a %>% 
   filter(grepl("Agg", cropweedsens),
-         grepl("Low", cropsens)) %>% 
-  select(cropcov_pct, totyld) %>% 
-  mutate(cropcov_pct2 = cropcov_pct*cropcov_pct)
+         grepl("Low", cropsens))
 
-d6
+#--totyld as a function of cropcov_pct
 
-data$hours2 <- data$hours^2
+model <- nls(totyld ~ a * cropcov_pct^2 + b * cropcov_pct + c, 
+             data = d6, 
+             start = list(a=0, b=0, c=0))
+print(model)
 
-#fit quadratic regression model
-quadraticModel <- lm(totyld ~ cropcov_pct + cropcov_pct2, data=d6)
+d_preds <-
+  tibble(cropcov_pct = seq(0, 65, 1)) %>% 
+  mutate(preds = predict(model, tibble(cropcov_pct = seq(0, 65, 1))))
 
-#view model summary
-summary(quadraticModel)
 
-cropcovVals <- seq(0, 70, 0.1)
-totyldPredict <- predict(quadraticModel,
-                            list(cropcov_pct = cropcovVals, 
-                                 cropcov_pct2 = cropcovVals*cropcovVals))
+#--it is a very bad fit
+ggplot() +
+  geom_point(data = d6, aes(cropcov_pct, totyld)) +
+  geom_line(data = d_preds, aes(cropcov_pct, preds))
 
-tibble(cropcov_pct = cropcovVals,
-       totyldPred = totyldPredict) %>% 
-  left_join(d6 %>% mutate(cropcov_pct = round(cropcov_pct, 1))) %>% 
-  ggplot() +
-  geom_point(aes(cropcov_pct, totyld)) +
-  geom_line(aes(cropcov_pct, totyldPred))
+summary(model)
+
+#--the maximum is a function of several variables
+# - b / 2a
+coef(model)
+tst <- as.numeric(coef(model))
+tst
+
+max_yield_cropcov_pct <- (-tst[2])/(2*tst[1])
+#--how to get uncertainty in this value?
+#--error propogation?
+summary(model)
+tidy(model) %>% 
+  mutate(rel.error = abs(std.error/estimate)) %>% 
+  summarise(tot.rel.error = sum(rel.error))
+
+#--so an 11% error
+max_yield_cropcov_pct * .11
+
+#--why isn't this a single value?
+
+d_maxyld <- 
+  tibble(cropcov_pct = c(max_yield_cropcov_pct - max_yield_cropcov_pct*0.11,
+                       max_yield_cropcov_pct,
+                       max_yield_cropcov_pct + max_yield_cropcov_pct*0.11))
+
+
+the_maxy <- predict(object = model, newdata = tibble(cropcov_pct = max_yield_cropcov_pct))
+
+d_maxyld2 <- 
+  d_maxyld %>% 
+  mutate(cat = c("min", "mean", "max")) %>% 
+  pivot_wider(names_from = cat, values_from = cropcov_pct) %>% 
+  mutate(totyld = the_maxy)
+
+
+ggplot() +
+  geom_point(data = d6, aes(cropcov_pct, totyld)) +
+  geom_line(data = d_preds, aes(cropcov_pct, preds)) +
+  geom_point(data = d_maxyld2, 
+             aes(x = mean, y = totyld), 
+             color = "red", 
+             size = 4) +
+  geom_segment(data = d_maxyld2, 
+               aes(x = min, xend = max, y = totyld, yend = totyld), 
+               color = 'red', 
+               size = 2)
+
+#--beta might be more interesting
+
+# 7. fit nlraa beta --------------------------------------------------
+
+##--nlraa isn't working bc I can't load knitr...??
+library(nlme)
+library(knitr)
+library(nlraa)
+
+d7 <- 
+  d5a %>% 
+  select(cropcov_pct_meas, totyld_meas, cropweedsens, cropsens) %>% 
+  unite(cropweedsens, cropsens, col = "four_scen") %>% 
+  mutate(four_scenF = as.factor(four_scen)) %>% 
+  arrange(cropcov_pct_meas)
+
+d7G <- groupedData(totyld_meas ~ cropcov_pct_meas | four_scenF, data = d7)
+
+fit.nlis <- nlsList(totyld_meas ~ SSbgf(time = cropcov_pct_meas,
+                                        w.max, t.e, t.m), data = d7G)
